@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
+import signal
 import subprocess
 from abc import ABC, abstractmethod
 from typing import List, Optional
@@ -10,6 +12,26 @@ from typing import List, Optional
 from .types import HerdrMachineProfile
 
 logger = logging.getLogger("herdr.machine_monitor.adapter")
+
+# Herdr machine profiles are identified by a 32-character lowercase hex id.
+# Enforcing the format before invoking state-changing CLI commands is
+# defense-in-depth against a poisoned state file or malformed CLI output.
+HERDR_PROFILE_ID_RE = re.compile(r"^[0-9a-f]{32}$")
+
+
+def _is_valid_profile_id(profile_id: object) -> bool:
+    return isinstance(profile_id, str) and bool(HERDR_PROFILE_ID_RE.fullmatch(profile_id))
+
+
+def _kill_process_group(proc: subprocess.Popen) -> None:
+    """Kill a process started in its own session, including its children."""
+    try:
+        os.killpg(proc.pid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError, OSError):
+        try:
+            proc.kill()
+        except OSError:
+            pass
 
 
 class HerdrClientInterface(ABC):
@@ -46,19 +68,29 @@ class HerdrCliAdapter(HerdrClientInterface):
         cmd = [self.herdr_bin] + args
         logger.debug("Executing CLI command: %s", " ".join(cmd))
         try:
-            return subprocess.run(
+            # start_new_session lets a timeout reap the CLI process together
+            # with any children it spawned.
+            proc = subprocess.Popen(
                 cmd,
-                capture_output=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
                 text=True,
-                timeout=timeout,
-                check=False,
+                start_new_session=True,
             )
-        except subprocess.TimeoutExpired as e:
-            logger.warning("CLI command timed out after %s seconds: %s", timeout, " ".join(cmd))
-            raise e
         except FileNotFoundError as e:
             logger.error("Herdr binary not found at '%s'", self.herdr_bin)
             raise e
+        try:
+            stdout, stderr = proc.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            logger.warning("CLI command timed out after %s seconds: %s", timeout, " ".join(cmd))
+            _kill_process_group(proc)
+            proc.communicate()
+            raise
+        except Exception:
+            _kill_process_group(proc)
+            raise
+        return subprocess.CompletedProcess(cmd, proc.returncode, stdout, stderr)
 
     def list_machines(self) -> List[HerdrMachineProfile]:
         try:
@@ -88,6 +120,12 @@ class HerdrCliAdapter(HerdrClientInterface):
         if not profile_id:
             logger.error("Cannot disable machine with empty profile_id")
             return False
+        if not _is_valid_profile_id(profile_id):
+            logger.error(
+                "Refusing to disable machine: %r is not a valid 32-hex Herdr profile id",
+                profile_id,
+            )
+            return False
         try:
             logger.info("Disabling machine profile %s in Herdr...", profile_id)
             res = self._run_cli(["machine", "disable", profile_id], timeout=10.0)
@@ -104,6 +142,12 @@ class HerdrCliAdapter(HerdrClientInterface):
     def enable_machine(self, profile_id: str) -> bool:
         if not profile_id:
             logger.error("Cannot enable machine with empty profile_id")
+            return False
+        if not _is_valid_profile_id(profile_id):
+            logger.error(
+                "Refusing to enable machine: %r is not a valid 32-hex Herdr profile id",
+                profile_id,
+            )
             return False
         try:
             logger.info("Enabling machine profile %s in Herdr...", profile_id)

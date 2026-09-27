@@ -1,4 +1,7 @@
+import os
+import stat
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from typing import List, Optional
@@ -12,6 +15,7 @@ from src.test_runner import MachineTestRunner  # noqa: E402
 from src.types import (  # noqa: E402
     HerdrMachineProfile,
     MachineConfig,
+    MachineRuntimeState,
 )
 
 
@@ -294,6 +298,103 @@ class TestMachineConnectionMonitor(unittest.TestCase):
         self.assertTrue(result)
         self.assertEqual(self.mock_adapter.enabled_calls, ["8724cfc1531e3d6542673387623b8a52"])
         self.assertTrue(monitor.state["server1"].herdr_enabled)
+
+
+    def test_state_file_is_owner_only(self):
+        """state.json holds machine details and probe stderr; it must not be
+        world-readable, even when the directory pre-exists with loose perms."""
+        state_dir = tempfile.mkdtemp(prefix="herdr-mon-test-")
+        os.chmod(state_dir, 0o755)
+        os.environ["HERDR_PLUGIN_STATE_DIR"] = state_dir
+        try:
+            monitor = MachineConnectionMonitor(
+                herdr_adapter=self.mock_adapter,
+                machines=[],
+                sleep_fn=self.mock_sleep,
+            )
+            monitor.state["m"] = MachineRuntimeState(name="m")
+            monitor.save_state()
+            self.assertTrue(monitor.state_file.exists())
+            mode = stat.S_IMODE(os.stat(monitor.state_file).st_mode)
+            self.assertEqual(mode, 0o600)
+        finally:
+            os.environ.pop("HERDR_PLUGIN_STATE_DIR", None)
+
+    def test_error_messages_are_sanitized_in_state(self):
+        """Probe stderr is untrusted; it must be flattened to one line so it
+        cannot forge log entries or corrupt the state file."""
+        test_runner = MagicMock(spec=MachineTestRunner)
+        test_runner.check_availability.return_value = (False, "line1\nFORGED LOG LINE\r\nline3")
+
+        machine = MachineConfig(name="server1", max_retries=1, retry_delay=0.0)
+        monitor = MachineConnectionMonitor(
+            herdr_adapter=self.mock_adapter,
+            test_runner=test_runner,
+            machines=[machine],
+            sleep_fn=self.mock_sleep,
+        )
+        monitor.sync_machines()
+        monitor.check_machine(machine)
+
+        msg = monitor.state["server1"].last_error_message or ""
+        self.assertNotIn("\n", msg)
+        self.assertNotIn("\r", msg)
+
+    def test_stale_state_entries_are_pruned_on_sync(self):
+        """Removed machines must not keep stale state (and stale profile IDs)
+        alive in state.json forever."""
+        machine = MachineConfig(name="server1")
+        monitor = MachineConnectionMonitor(
+            herdr_adapter=self.mock_adapter,
+            machines=[machine],
+            sleep_fn=self.mock_sleep,
+        )
+        monitor.state["ghost"] = MachineRuntimeState(name="ghost", herdr_profile_id="deadbeef")
+        monitor.sync_machines()
+        self.assertNotIn("ghost", monitor.state)
+
+    def test_disable_refuses_malformed_profile_id(self):
+        """A poisoned/corrupted profile id must never reach the state-changing
+        Herdr CLI invocation."""
+        test_runner = MagicMock(spec=MachineTestRunner)
+        test_runner.check_availability.return_value = (False, "down")
+
+        machine = MachineConfig(name="server1", max_retries=1, retry_delay=0.0, auto_disable=True)
+        monitor = MachineConnectionMonitor(
+            herdr_adapter=self.mock_adapter,
+            test_runner=test_runner,
+            machines=[machine],
+            sleep_fn=self.mock_sleep,
+        )
+        monitor.sync_machines()
+        monitor.state["server1"].herdr_profile_id = "../../evil; rm -rf /"
+
+        result = monitor.check_machine(machine)
+        self.assertFalse(result)
+        self.assertEqual(self.mock_adapter.disabled_calls, [])
+
+    def test_disable_skipped_when_live_state_confirms_disabled(self):
+        """If Herdr reports the profile is already disabled, the cached state
+        must not trigger a redundant disable call."""
+        test_runner = MagicMock(spec=MachineTestRunner)
+        test_runner.check_availability.return_value = (False, "down")
+
+        machine = MachineConfig(name="server1", max_retries=1, retry_delay=0.0, auto_disable=True)
+        monitor = MachineConnectionMonitor(
+            herdr_adapter=self.mock_adapter,
+            test_runner=test_runner,
+            machines=[machine],
+            sleep_fn=self.mock_sleep,
+        )
+        monitor.sync_machines()
+
+        # Simulate the profile having been disabled out-of-band
+        self.mock_adapter.profiles[0].enabled = False
+
+        result = monitor.check_machine(machine)
+        self.assertFalse(result)
+        self.assertEqual(self.mock_adapter.disabled_calls, [])
+        self.assertFalse(monitor.state["server1"].herdr_enabled)
 
 
 if __name__ == "__main__":

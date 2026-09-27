@@ -124,9 +124,13 @@ def main() -> int:
     elif args.check_once:
         action = "check"
 
-    defaults, machines = ConfigLoader.load_defaults_and_machines(
-        machines_file_path=args.machines_file,
-    )
+    try:
+        defaults, machines = ConfigLoader.load_defaults_and_machines(
+            machines_file_path=args.machines_file,
+        )
+    except Exception as e:
+        logging.error("Failed to load plugin configuration: %s", e)
+        return 2
 
     adapter = HerdrCliAdapter(herdr_bin=defaults.herdr_bin)
     test_runner = MachineTestRunner(herdr_adapter=adapter)

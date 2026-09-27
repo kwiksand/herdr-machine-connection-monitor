@@ -67,5 +67,14 @@ class TestHerdrCliAdapter(unittest.TestCase):
         )
 
 
+def test_disable_rejects_malformed_profile_id(self):
+        """State-changing CLI calls must validate the 32-hex profile id
+        format before executing, as defense-in-depth against a poisoned
+        state file or malformed upstream output."""
+        adapter = HerdrCliAdapter(herdr_bin="herdr")
+        self.assertFalse(adapter.disable_machine("not-a-valid-id; rm -rf /"))
+        self.assertFalse(adapter.enable_machine("$(touch /tmp/pwned)"))
+
+
 if __name__ == "__main__":
     unittest.main()

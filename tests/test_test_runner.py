@@ -70,5 +70,30 @@ class TestMachineTestRunner(unittest.TestCase):
         mock_adapter.probe_machine.assert_called_once_with("server4", timeout_seconds=4.0)
 
 
+    def test_placeholder_substitution_is_single_pass(self):
+        """Interpolated values must never be re-scanned for placeholders.
+        The old sequential str.replace passes turned a machine named
+        "x{port}" into "x22" when expanding {name}."""
+        from src.test_runner import interpolate_placeholders
+
+        fmt = {"name": "x{port}", "ip": "1.2.3.4", "hostname": "h", "port": "22"}
+        out = interpolate_placeholders("echo {name} {ip} {port}", fmt)
+        self.assertEqual(out, "echo x{port} 1.2.3.4 22")
+
+    def test_rejects_dash_prefixed_ping_target(self):
+        """Probe targets starting with '-' must be rejected (argument
+        injection into the ping CLI), not passed through as argv."""
+        runner = MachineTestRunner()
+        ok, err = runner._run_ping_test("-f", 1.0)
+        self.assertFalse(ok)
+        self.assertIn("Invalid ping target", err or "")
+
+    def test_rejects_dash_prefixed_tcp_target(self):
+        runner = MachineTestRunner()
+        ok, err = runner._run_tcp_test("-q", 22, 1.0)
+        self.assertFalse(ok)
+        self.assertIn("Invalid TCP target", err or "")
+
+
 if __name__ == "__main__":
     unittest.main()
