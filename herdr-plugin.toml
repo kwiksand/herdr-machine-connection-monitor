@@ -1,0 +1,30 @@
+id = "machine-connection-monitor"
+name = "machine-connection-monitor"
+version = "0.1.0"
+min_herdr_version = "0.9.0"
+description = "Monitors Herdr machine connections, executes custom tests, and auto-disables machines after 3 failed retries"
+platforms = ["linux", "macos"]
+
+[[actions]]
+id = "check"
+title = "Check Machine Connections Once"
+command = ["python3", "main.py", "check"]
+description = "Run a single check across all machines and retry failed ones up to 3 times before disabling."
+
+[[actions]]
+id = "daemon"
+title = "Run Connection Monitor Daemon"
+command = ["python3", "main.py", "daemon"]
+description = "Continuously poll machine availability according to per-machine intervals."
+
+[[actions]]
+id = "status"
+title = "Show Machine Connection Status"
+command = ["python3", "main.py", "status"]
+description = "Print current availability, retry count, and Herdr enabled/disabled state."
+
+[[actions]]
+id = "sync"
+title = "Sync With Herdr Machines"
+command = ["python3", "main.py", "sync"]
+description = "Synchronize machine list with Herdr saved profiles."

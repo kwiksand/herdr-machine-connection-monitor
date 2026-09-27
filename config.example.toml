@@ -1,0 +1,10 @@
+# Herdr Machine Connection Monitor Plugin Settings
+# Place in ~/.config/herdr/plugins/config/machine-connection-monitor/config.toml
+
+max_retries = 3
+retry_delay_seconds = 5.0
+poll_interval_seconds = 30.0
+probe_timeout_seconds = 5.0
+auto_disable = true
+auto_enable = false
+herdr_bin = "herdr"

@@ -1,0 +1,48 @@
+# Herdr Machine Connection Monitor Configuration
+# Place this file at ~/.config/herdr/machine.yml or specify via HERDR_MACHINES_FILE
+
+defaults:
+  max_retries: 3                  # Failed attempts before auto-disabling a machine
+  retry_delay_seconds: 5.0        # Delay between retry attempts (seconds)
+  poll_interval_seconds: 30.0     # Default poll interval for daemon mode (seconds)
+  probe_timeout_seconds: 5.0      # Timeout for individual test execution (seconds)
+  auto_disable: true              # Automatically disable machine in Herdr after 3 failed retries
+  auto_enable: false              # Automatically re-enable machine in Herdr when it comes back online
+
+machines:
+  # Example 1: Custom test checking Tailscale status as requested
+  - name: server1
+    poll_interval: 30
+    server:
+      ip: 192.168.0.2
+      hostname: server1.mydomain.com
+    test:
+      online: '[[ "$(tailscale status --json 2>/dev/null | jq -r .BackendState)" = "Running" ]]'
+
+  # Example 2: Ping test with parameter interpolation ({ip}, {hostname}, {name})
+  - name: server2
+    poll_interval: 60
+    server:
+      ip: 192.168.0.3
+      hostname: server2
+    test:
+      online: ping -c 1 -W 2 {ip} >/dev/null 2>&1
+
+  # Example 3: TCP port check (checks SSH availability)
+  - name: server3
+    poll_interval: 45
+    server:
+      ip: 192.168.0.4
+      port: 22
+    test:
+      type: tcp
+      timeout_seconds: 3.0
+
+  # Example 4: Native Herdr CLI probe (uses `herdr --machine <name> workspace list`)
+  - name: server4
+    poll_interval: 60
+    server:
+      hostname: server4
+    test:
+      type: herdr
+      timeout_seconds: 5.0
